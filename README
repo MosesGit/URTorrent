@@ -1,0 +1,45 @@
+CSC 257
+Assignment 05
+Team 10
+Yuxuan Wang and Moses Chen
+
+URTorrent
+
+We have implemented our program in C++. The first thing the client does is generate the random 20 byte ID for itself. We check arguments to make sure that the filename and port number are entered.
+
+We then parse the metainfo file and store the data in variables we can pull from later. We are using global variables; while this may be bad practice, due to the nature of our program and threads, this is the solution we chose to go with. Once the metainfo is parsed, we have the information we need for the next steps.
+
+We check if the original file (not the .torrent file) exists. If it does, we check to see if all pieces are good. If so, we are a seeder, if not we are a leecher. If the file does not exist, we create the file. Our bitfield is also created and updated during this process.
+
+Next we have an infinite loop that is used to keep on listening for commands:
+
+metainfo
+-Prints the data we gathered from the metainfo file
+
+announce
+-All the peers would announce to tracker periodically to update the peer list. Once a new peer announced, every other peer would connect with it and handshake.
+-Our leechers would announce automatically, you do not need to type "announce" for each leechers.
+-We also have a thread that periodically announces to the tracker every 10 seconds. In theory, this should be done by interval but for our testing purposes we went with a shorter time.
+
+trackerinfo
+-Prints the data from the last announce to the tracker
+
+show
+-Prints the connections information
+
+status
+-Prints the status of the download
+
+quit
+-Quits the program
+
+Connections
+We use threads to deal with multi-connection. Each thread is connected to one peer. Our program would keep looking for the blocks we do not have. If we know another peer has the block, we would send a request to it. Once we get a block, we will tell peer that I have this block, so that other peer could update their bitfield. We select miss blocks from bitfield totally randomly.
+
+Compile
+To compile our code with the makefile, use "make".
+
+Run
+To run our program, use the command "./urtorrent <torrent name> <port number>".
+
+Thank you.
