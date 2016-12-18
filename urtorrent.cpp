@@ -21,8 +21,10 @@
 #include <functional>
 #include <thread>
 #include <chrono>
+#include <math.h>
 
 using namespace std;
+
 
 
 pthread_mutex_t mutex_finish; //I have 3 critical region
@@ -37,6 +39,8 @@ vector<int> peers_flag;
 vector<long long> peers_down;
 vector<long long> peers_up;
 
+vector<int> block_list;
+
 int global_bitfield[410];
 
 long long downloaded, uploaded, bytes_left;
@@ -47,6 +51,7 @@ int verbose;
 int piece_length;
 int piece_num;
 int info_length;
+int bitfield_num;
 unsigned char info_hash[SHA_DIGEST_LENGTH]; //20
 void *connection_handler(void *); //to deal with multi-connected
 void* socket_handler(void* lp); //to deal with the message
@@ -67,6 +72,8 @@ string announce_ip;
 int announce_port;
 
 bool announcing;
+
+
 
 struct Pass {
 	int portno;
@@ -385,7 +392,7 @@ string tracker_announce(string peer_id, int port, unsigned char* hash, string ev
 	bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr,server->h_length);
 	serv_addr.sin_port = htons(announce_port);
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
-		error("ERROR connecting1");
+		error("ERROR connecting3");
 
 	//GET request
 	string request;
@@ -455,13 +462,13 @@ string tracker_announce(string peer_id, int port, unsigned char* hash, string ev
 				}
 				stringstream strStream;
 				
-				strStream<<(int)*((peer_node->val.d[i].val)->val.s+(j*6));
+				strStream<<(int)(unsigned char)*((peer_node->val.d[i].val)->val.s+(j*6));
 				strStream<<".";
-				strStream<<(int)*((peer_node->val.d[i].val)->val.s+(j*6)+1);
+				strStream<<(int)(unsigned char)*((peer_node->val.d[i].val)->val.s+(j*6)+1);
 				strStream<<".";
-				strStream<<(int)*((peer_node->val.d[i].val)->val.s+(j*6)+2);
+				strStream<<(int)(unsigned char)*((peer_node->val.d[i].val)->val.s+(j*6)+2);
 				strStream<<".";
-				strStream<<(int)*((peer_node->val.d[i].val)->val.s+(j*6)+3);
+				strStream<<(int)(unsigned char)*((peer_node->val.d[i].val)->val.s+(j*6)+3);
 				string addr_temp = strStream.str();
 				//cout<<"addr_temp "<<addr_temp<<endl;
 				int temp_port = ((unsigned char)*((peer_node->val.d[i].val)->val.s+(j*6)+4))*256 + (unsigned char)*((peer_node->val.d[i].val)->val.s+(j*6)+5);
@@ -478,7 +485,13 @@ string tracker_announce(string peer_id, int port, unsigned char* hash, string ev
 						}
 					}
 					if (!has) {
-						if(memcmp(addr_temp.c_str(), "0.0.0.0", 7)!=0){
+						int check_blocked = 1;
+						for(int m=0; m<block_list.size(); m++){
+							if(temp_port==block_list[m])
+								check_blocked = 0;
+						}
+
+						if(memcmp(addr_temp.c_str(), "0.0.0.0", 7)!=0 && check_blocked){
 							peers_ip.push_back(addr_temp);
 							peers_port.push_back(temp_port);
 							peers_flag.push_back(0);
@@ -488,6 +501,11 @@ string tracker_announce(string peer_id, int port, unsigned char* hash, string ev
 					}
 				}
 				else {
+					int check_blocked = 1;
+						for(int m=0; m<block_list.size(); m++){
+							if(temp_port==block_list[m])
+								check_blocked = 0;
+						}
 					if(memcmp(addr_temp.c_str(), "0.0.0.0", 7)!=0){
 						peers_ip.push_back(addr_temp);
 						peers_port.push_back(temp_port);
@@ -527,12 +545,7 @@ void start_announce_thread(string peer_id, int port, unsigned char* hash1) {
 	t.detach();
 	this_thread::sleep_for(chrono::seconds(1));
 	//cout<<"seeder "<<seeder<<endl;
-	if (!seeder) {
-		pthread_t tid;
-		if (pthread_create(&tid, NULL, establish_handler, (void*) 0) < 0) {
-			perror("Error on create thread");
-		}
-	}
+	
 }
 
 int main(int argc, char* argv[]) {
@@ -598,6 +611,7 @@ int main(int argc, char* argv[]) {
 	info_start = buf.find("6:pieces");
 	int info_end = buf.find(":", info_start+8);
 	piece_num = atoi((buf.substr(info_start+8, info_end-8-info_start)).c_str())/20;
+	bitfield_num = piece_num/8 + 1;
 	finish = piece_num;
 	//cout<<"piece_num "<<piece_num<<endl;
 	infile.close();
@@ -686,6 +700,12 @@ int main(int argc, char* argv[]) {
 				start_announce_thread(peer_id, port, info_hash);
 				announcing = true;
 			}
+			if (!seeder) {
+		pthread_t tid;
+		if (pthread_create(&tid, NULL, establish_handler, (void*) 0) < 0) {
+			perror("Error on create thread");
+		}
+	}
 		}
 		else if (command == "trackerinfo") {
 			print_tracker_info(1, complete, downloaded, incomplete, interval, min_interval);
@@ -790,12 +810,22 @@ void* socket_handler(void* lp){
 				printf("\n");
 			}
 			if(memcmp(check_hash, (char*)info_hash, SHA_DIGEST_LENGTH)==0){
-				string reply_handshake(piece_num, '0');
-				int reply_handshake_length = 4+1+piece_num;
-				for (int j = 0; j < piece_num; j++) {
+				string reply_handshake;
+				int reply_handshake_length = 4+1+bitfield_num;
+				for (int j = 0; j < piece_num; j+=8) {
+					char to_byte = (char) 0;
+					for(int k=0; k<8; k++){
+						if(*(bitfield+j+k)=='1'){
+							to_byte += (char)pow(2,7-k);
+						}
+					}
 					
-					reply_handshake[j]=*(bitfield+j);
+					reply_handshake.push_back(to_byte);
 				}
+				printf("reply_handshake %d %d\n", bitfield_num, piece_num);
+				for (int j = 0; j < bitfield_num; j++)
+					printf("%02x", (unsigned char)reply_handshake[j]);
+				printf("\n");
 				//while(1);
 				//build_message(reply_handshake_length, (char)5, reply_handshake);
 				on = write(*newsockfd,build_message(reply_handshake_length, (char)5, reply_handshake).c_str(),reply_handshake_length);
@@ -1117,8 +1147,10 @@ void *establish_handler(void *){
 		pthread_mutex_lock(&mutex_finish);
 		for(int i=0; i<peers_ip.size(); i++){
 			if(peers_port[i]!=port && peers_flag[i]==0){
-				if(verbose)
+				if(verbose){
 					cout<<"peer_port[i] "<<peers_port[i]<<endl;
+					cout<<"peer_ip[i] "<<peers_ip[i]<<endl;
+				}
 				//int * peer_sockfd = (int*)malloc(sizeof(int));
 				Pass* pass_message = (Pass*)malloc(sizeof(Pass));
 				pass_message->portno = peers_port[i];
@@ -1143,15 +1175,33 @@ void *establish_handler(void *){
 				peer_addr.sin_family = AF_INET;
 				bcopy((char *)hptr->h_addr, (char *)&peer_addr.sin_addr.s_addr,hptr->h_length);
 				peer_addr.sin_port = htons(peers_port[i]);
-						
-				if (connect(pass_message->fd,(struct sockaddr *) &peer_addr,sizeof(peer_addr)) < 0) 
-					error("ERROR connecting1");
-				if(pass_message->fd!=-1){
+				pthread_mutex_lock(&mutex_peers);		
+				if (connect(pass_message->fd,(struct sockaddr *) &peer_addr,sizeof(peer_addr)) < 0){
+					//error("ERROR connecting2");
+					block_list.push_back(peers_port[i]);
+					vector <int>::iterator Iter;
+					peers_port.erase(peers_port.begin()+i);
+
+					peers_ip.erase(peers_ip.begin()+i);
+
+					peers_flag.erase(peers_flag.begin()+i);
+					
+					peers_down.erase(peers_down.begin()+i);
+
+					peers_up.erase(peers_up.begin()+i);
+							
+							
+					close(pass_message->fd);
+				}
+				else{
+					if(pass_message->fd!=-1){
 					
 	          		pthread_create(&thread_id,0,&send_handler, (void*)pass_message );
 	            	
+					}
+					peers_flag[i]=1;
 				}
-				peers_flag[i]=1;
+				pthread_mutex_unlock(&mutex_peers);
 			}
 		}
 		pthread_mutex_unlock(&mutex_finish);
