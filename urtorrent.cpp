@@ -22,6 +22,7 @@
 #include <thread>
 #include <chrono>
 #include <math.h>
+#include <curl/curl.h>
 
 using namespace std;
 
@@ -64,6 +65,7 @@ char peer_id[20];
 vector<int> boardcast_have;
 char pieces[410][20];
 int finish;
+string my_ip;
 string filename;
 string announce, info_name;
 //tracker info
@@ -245,7 +247,7 @@ char* int_to_bytes(int value) {
 	src[3] =  (char) (value & 0xFF);
 	src[4] = 0;
 	return src;
-}  
+}
 
 string build_message(int length, char ID, string payload) {
 	//cout<<"??"<<endl;
@@ -285,11 +287,42 @@ string build_request(unsigned char* hash, string peer_id, int port, int up, int 
 	return str;
 }
 
+size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+	((string*)userp)->append((char*)contents, size* nmemb);
+	return size* nmemb;
+}
+
+string get_my_ip() {
+	CURL *curl;
+	CURLcode res;
+	string ip;
+	while(ip.empty()) {
+		//cout<<"test"<<endl;
+		curl = curl_easy_init();
+		if(curl) {
+			curl_easy_setopt(curl, CURLOPT_URL, "http://checkip.dyndns.org");
+			curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+			curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ip);
+			curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3L);
+			res = curl_easy_perform(curl);
+			//cout<<"test2"<<endl;
+			curl_easy_cleanup(curl);
+		}
+	}
+	
+	int start = ip.find("Current IP Address: ");
+	int end = ip.rfind("</body>");
+	ip = ip.substr(start+20, end-(start+20));
+	//cout<<ip<<endl;
+	return ip;
+}
+
 void print_metainfo(string file_name, string peer_id) {
 	//unsigned char id_buf[8192];
 	//unsigned char id_hash[20];
+	//memcpy((char*)id_buf, peer_id.c_str(), peer_id.size());
 	//SHA1(id_buf, sizeof(id_buf) - 1, id_hash);
-	printf("\tIP/port    : 127.0.0.1/%d\n", port);
+	printf("\tIP/port    : %s/%d\n", my_ip.c_str(), port);
 	printf("\tID         : %s\n", peer_id.c_str());
 	//printf("\tID         : ");
 	//for (int i = 0; i < 20; i++)
@@ -542,13 +575,13 @@ void start_announce_thread(string peer_id, int port, unsigned char* hash1) {
 }
 
 int main(int argc, char* argv[]) {
-	announcing = false;
 	strcpy(peer_id, "UR-1-0--");
 	//random numbers
 	srand(time(NULL));
 	for(int i = 0; i < 12; i++) {
 		strcat(peer_id, to_string(rand() % 10).c_str());
 	}
+	announcing = false;
 	
 	if(argc < 3) {
 		fprintf(stderr,"need filename and port number\n");
@@ -682,6 +715,8 @@ int main(int argc, char* argv[]) {
 		string command;
 		cin>>command;
 		if(command == "metainfo") {
+			my_ip = get_my_ip();
+			//cout<<my_ip<<endl;
             print_metainfo(torrent_name, peer_id);
 		}
 		else if(command == "announce") {
@@ -841,8 +876,13 @@ void* socket_handler(void* lp) {
 				printf("\n");
 			}
 			int piece_index = (unsigned char)message[5]*16777216 + (unsigned char)message[6]*65536 + (unsigned char)message[7]*256 + (unsigned char)message[8];
-			if(verbose)
+			int piece_begin = (unsigned char)message[9]*16777216 + (unsigned char)message[10]*65536 + (unsigned char)message[11]*256 + (unsigned char)message[12];
+			int piece_length = (unsigned char)message[13]*16777216 + (unsigned char)message[14]*65536 + (unsigned char)message[15]*256 + (unsigned char)message[16];
+			if(verbose) {
 				cout<<"piece_index "<<piece_index<<endl;
+				cout<<"piece_begin "<<piece_begin<<endl;
+				cout<<"piece_length "<<piece_length<<endl;
+			}
 			char* piece_buffer = (char*) malloc(piece_length+13);
 			piece_buffer[4] = (char) 7;
 			string piece_send;
@@ -977,24 +1017,21 @@ void *send_handler(void *arg) {
 	free(bitfield_buffer);
 	
 	//start as choked and not interested
-	sn = write(peer_pass->fd, build_message(1, (char)2, "").c_str(), 5);
-	
-	//send interested
-
+	//sn = write(peer_pass->fd, build_message(1, (char)2, "").c_str(), 5);
 	
 	//wait for unchoke
-	bool choked = false;
-	sn = read(peer_pass->fd, message, 5+piece_num);
-	
-	if(*(message+4) == (char)0)
-		choked = true;
-	else if(*(message+4) == (char)1)
-		choked = false;
-	while(choked) {
-		sn = read(peer_pass->fd, message, 5+piece_num);
-		if(*(message+4) == (char)1 || )
-			choked = false;
-	}
+// 	bool choked = false;
+// 	sn = read(peer_pass->fd, message, 5+piece_num);
+// 	
+// 	if(*(message+4) == (char)0)
+// 		choked = true;
+// 	else if(*(message+4) == (char)1)
+// 		choked = false;
+// 	while(choked) {
+// 		sn = read(peer_pass->fd, message, 5+piece_num);
+// 		if(*(message+4) == (char)1)
+// 			choked = false;
+// 	}
 	
 	double down_start, down_end;
 	while(finish > 0) {
