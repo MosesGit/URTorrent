@@ -757,18 +757,13 @@ void *connection_handler(void *) {
 		close(sockfd);
 	}
 }
-			/*deal_sock = (char*)malloc(piece_length);
-				memcpy(deal_sock, message, piece_length); //prepare the thread  
-			delete [] message;
-			pthread_t tid;
-			if(pthread_create(&tid, NULL,  message_handler, (void*) deal_sock) < 0)
-				perror("Error on create thread");*/
+
 void* socket_handler(void* lp) {
 	int *newsockfd = (int*)lp;
 	int on = 1; 
 	int connection_port = 0;
 	int flag_port = 1;
-	char * message = new char [piece_length+13]; 
+	char *message = new char[piece_length+13];
 	if(verbose)
 		cout<<"piece_length "<<piece_length<<endl;
 	while(1) {
@@ -933,8 +928,9 @@ FINISH:
 void *send_handler(void *arg) {
 	Pass *peer_pass = (Pass*)arg;
 	char handshake_buffer[67];
+	char *message = new char[piece_length+13];
 	
-	handshake_buffer[0]=(char)67;
+	handshake_buffer[0] = (char)67;
 	//int rec_length = (int)*handshake_buffer;
 	
 	//cout<<"rec_length "<<rec_length<<" "<<(int)handshake_length<<endl;
@@ -978,6 +974,25 @@ void *send_handler(void *arg) {
 	//start as choked and not interested
 	sn = write(peer_pass->fd, build_message(1, (char)0, "").c_str(), 1);
 	sn = write(peer_pass->fd, build_message(1, (char)3, "").c_str(), 1);
+	
+	//send interested
+	sn = write(peer_pass->fd, build_message(1, (char)3, "").c_str(), 1);
+	
+	//wait for unchoke
+	bool choked = false;
+	sn = read(peer_pass->fd, message, 5+piece_num);
+	if(sn < 0)
+		error("ERROR reading from socket2");
+	if(*(message+4) == (char)0)
+		choked = true;
+	else if(*(message+4) == (char)1)
+		choked = false;
+	while(choked) {
+		if(sn < 0)
+			error("ERROR reading from socket3");
+		if(*(message+4) == (char)1)
+			choked = false;
+	}
 	
 	double down_start, down_end;
 	while(finish > 0) {
