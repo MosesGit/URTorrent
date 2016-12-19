@@ -31,6 +31,7 @@ pthread_mutex_t mutex_finish; //I have 3 critical region
 pthread_mutex_t mutex_global;
 pthread_mutex_t mutex_peers;
 pthread_mutex_t mutex_files;
+pthread_mutex_t mutex_have;
 
 //global variables
 vector<string> peers_ip;
@@ -38,8 +39,8 @@ vector<int> peers_port;
 vector<int> peers_flag;
 vector<long long> peers_down;
 vector<long long> peers_up;
+vector<vector<int>> peers_have;
 
-vector<int> block_list;
 
 int global_bitfield[410];
 
@@ -481,33 +482,29 @@ string tracker_announce(string peer_id, int port, unsigned char* hash, string ev
 						}
 					}
 					if(!has) {
-						int check_blocked = 1;
-						for(int m = 0; m < block_list.size(); m++) {
-							if(temp_port == block_list[m])
-								check_blocked = 0;
-						}
 						
-						if(memcmp(addr_temp.c_str(), "0.0.0.0", 7)!=0 && check_blocked) {
+						
+						if(memcmp(addr_temp.c_str(), "0.0.0.0", 7)!=0 ) {
 							peers_ip.push_back(addr_temp);
 							peers_port.push_back(temp_port);
 							peers_flag.push_back(0);
 							peers_down.push_back(0);
 							peers_up.push_back(0);
+							vector<int> piece_have;
+							peers_have.push_back(piece_have);
 						}
 					}
 				}
 				else {
-					int check_blocked = 1;
-					for(int m = 0; m < block_list.size(); m++) {
-						if(temp_port == block_list[m])
-							check_blocked = 0;
-					}
+					
 					if(memcmp(addr_temp.c_str(), "0.0.0.0", 7) != 0) {
 						peers_ip.push_back(addr_temp);
 						peers_port.push_back(temp_port);
 						peers_flag.push_back(0);
 						peers_down.push_back(0);
 						peers_up.push_back(0);
+						vector<int> piece_have;
+						peers_have.push_back(piece_have);
 					}
 				}
 				pthread_mutex_unlock(&mutex_peers);
@@ -944,8 +941,6 @@ void *send_handler(void *arg) {
 	
 	memcpy((char*)(handshake_buffer+47), peer_id, 20);
 	char* get_port = int_to_bytes(port);
-	memcpy((char*)(handshake_buffer+47), get_port+2, 1);
-	memcpy((char*)(handshake_buffer+48), get_port+3, 1);
 	delete [] get_port;
 	if(verbose) {
 		printf("handshake_buffer: ");
@@ -963,34 +958,41 @@ void *send_handler(void *arg) {
 		printf("\n");
 	}
 	vector<char> peer_bitfield;
-	for(int i = 0; i < piece_num; i++) {
-		if(*(bitfield_buffer+5+i) == '1')
-			peer_bitfield.push_back('1');
-		else
-			peer_bitfield.push_back('0');
+	int ctr = 0;
+	for(int i=0; i<bitfield_num; i++){
+		char bit_to_byte = *(bitfield_buffer+5+i);
+		for(int k=0; k<8; k++){
+			if(bit_to_byte & 1<<(7-k))
+				peer_bitfield.push_back('1');
+			else
+				peer_bitfield.push_back('0');
+			ctr++;
+			if(ctr > piece_num - 1)
+				break;
+		}
+		if(ctr > piece_num - 1)
+			break;	
+		
 	}
 	free(bitfield_buffer);
 	
 	//start as choked and not interested
-	sn = write(peer_pass->fd, build_message(1, (char)0, "").c_str(), 1);
-	sn = write(peer_pass->fd, build_message(1, (char)3, "").c_str(), 1);
+	sn = write(peer_pass->fd, build_message(1, (char)2, "").c_str(), 5);
 	
 	//send interested
-	sn = write(peer_pass->fd, build_message(1, (char)3, "").c_str(), 1);
+
 	
 	//wait for unchoke
 	bool choked = false;
 	sn = read(peer_pass->fd, message, 5+piece_num);
-	if(sn < 0)
-		error("ERROR reading from socket2");
+	
 	if(*(message+4) == (char)0)
 		choked = true;
 	else if(*(message+4) == (char)1)
 		choked = false;
 	while(choked) {
-		if(sn < 0)
-			error("ERROR reading from socket3");
-		if(*(message+4) == (char)1)
+		sn = read(peer_pass->fd, message, 5+piece_num);
+		if(*(message+4) == (char)1 || )
 			choked = false;
 	}
 	
@@ -1081,53 +1083,13 @@ void *send_handler(void *arg) {
 					}
 					bitfield[receive_index]='1';
 					//cout<<"!!!!!!!!!!!!!!!!!!!!!!!!!!! "<<bitfield<<endl;
-					
+				pthread_mutex_lock(&mutex_have);
+				for(int i=0; i<peers_ip.size(); i++){
 					if(peers_port[i]!=port) {
-						int  notify_sockfd;
-						struct hostent *hptr;
-						struct sockaddr_in serv_addr, peer_addr;
-						//string raddr = *(peers_ip[i])+"."+*(peers_ip[i]+1)+"."+*(peers_ip[i]+2)+"."+*(peers_ip[i]+3);
-						int i=rand()%peers_ip.size();
-						notify_sockfd = socket(AF_INET, SOCK_STREAM, 0);
-						if(notify_sockfd < 0) 
-							error("ERROR opening socket");
-						bzero((char *) &serv_addr, sizeof(serv_addr));
-						pthread_mutex_lock(&mutex_peers);
-						if(!inet_aton(peers_ip[i].c_str(),&serv_addr.sin_addr)) {
-							printf("Inet_aton error\n");
-							exit(1);
-						}
-						pthread_mutex_unlock(&mutex_peers);
-						if((hptr=gethostbyaddr((void *)&serv_addr.sin_addr,4,AF_INET)) == NULL) {
-							printf("gethostbyaddr error for addr:%s\n",peers_ip[i]);
-							printf("h_errno %d\n",h_errno);
-							exit(1);
-						}
-						
-						peer_addr.sin_family = AF_INET;
-						bcopy((char *)hptr->h_addr, (char *)&peer_addr.sin_addr.s_addr,hptr->h_length);
-						peer_addr.sin_port = htons(peers_port[i]);
-						
-						if(connect(notify_sockfd,(struct sockaddr *) &peer_addr,sizeof(peer_addr)) < 0) 
-							error("ERROR connecting1");
-						char have_buffer[11];
-						have_buffer[0] = (char)0;
-						have_buffer[1] = (char)0;
-						have_buffer[2] = (char)0;
-						have_buffer[3] = (char)11;
-						have_buffer[4] = (char)4;
-						char* have_temp = int_to_bytes(receive_index);
-						have_buffer[5] = have_temp[0];
-						have_buffer[6] = have_temp[1];
-						have_buffer[7] = have_temp[2];
-						have_buffer[8] = have_temp[3];
-						have_temp = int_to_bytes(port);
-						have_buffer[9] = have_temp[2];
-						have_buffer[10] = have_temp[3];
-						delete [] have_temp;
-						int hn = write(notify_sockfd, have_buffer, 11);//send have
-						//close(notify_sockfd);
+						peers_have[i].push_back(receive_index);
 					}
+				}	
+				pthread_mutex_unlock(&mutex_have);	
 				finish--;
 				//cout<<"!!!!!!!!!!!!!!!!!!!!!finish "<<finish<<endl;
 			}
@@ -1194,13 +1156,7 @@ void *establish_handler(void *){
 				pthread_mutex_lock(&mutex_peers);
 				if(connect(pass_message->fd,(struct sockaddr *) &peer_addr,sizeof(peer_addr)) < 0) {
 					//error("ERROR connecting2");
-					block_list.push_back(peers_port[i]);
-					vector <int>::iterator Iter;
-					peers_port.erase(peers_port.begin()+i);
-					peers_ip.erase(peers_ip.begin()+i);
-					peers_flag.erase(peers_flag.begin()+i);
-					peers_down.erase(peers_down.begin()+i);
-					peers_up.erase(peers_up.begin()+i);
+					
 					close(pass_message->fd);
 				}
 				else {
